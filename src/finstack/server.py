@@ -202,11 +202,35 @@ def main() -> None:
         return
 
     if transport in ("http", "streamable-http"):
-        mcp.run(
-            transport="streamable-http",
-            host=config.host,
-            port=config.port,
-        )
+        # FastMCP.run() no longer accepts host/port kwargs (mcp >= ~1.8);
+        # configure them on the settings object before starting.
+        mcp.settings.host = config.host
+        mcp.settings.port = config.port
+
+        # The MCP SDK enables DNS-rebinding protection by default, which only
+        # allows localhost Host headers. Behind a public domain (Render, Railway,
+        # Fly, a reverse proxy, ...) every request would otherwise be rejected
+        # with "421 Invalid Host header". Let the deployer declare the host(s):
+        #   FINSTACK_ALLOWED_HOSTS=example.onrender.com,api.example.com
+        #   FINSTACK_ALLOWED_HOSTS=*   -> disable the check entirely
+        allowed = os.getenv("FINSTACK_ALLOWED_HOSTS", "").strip()
+        if allowed:
+            from mcp.server.transport_security import TransportSecuritySettings
+
+            if allowed == "*":
+                mcp.settings.transport_security = TransportSecuritySettings(
+                    enable_dns_rebinding_protection=False
+                )
+            else:
+                hosts = [h.strip() for h in allowed.split(",") if h.strip()]
+                origins = [f"https://{h}" for h in hosts] + [f"http://{h}" for h in hosts]
+                mcp.settings.transport_security = TransportSecuritySettings(
+                    enable_dns_rebinding_protection=True,
+                    allowed_hosts=hosts,
+                    allowed_origins=origins,
+                )
+
+        mcp.run(transport="streamable-http")
         return
 
     logger.error("Unknown transport: %s", transport)
